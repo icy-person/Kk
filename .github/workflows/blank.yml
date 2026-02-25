@@ -1,0 +1,87 @@
+name: Build FFmpeg Libraries Only
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      NDK_VERSION: 25.1.8937393
+      API_LEVEL: 21
+
+    steps:
+
+      - name: Checkout Project
+        uses: actions/checkout@v4
+
+      # -----------------------------
+      # Setup Android Tools
+      # -----------------------------
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK + CMake
+        run: |
+          sdkmanager "ndk;${NDK_VERSION}"
+          sdkmanager "cmake;3.22.1"
+          yes | sdkmanager --licenses
+
+      # -----------------------------
+      # Download FFmpeg Source Separately
+      # -----------------------------
+
+      - name: Download FFmpeg Source
+        run: |
+          wget https://ffmpeg.org/releases/ffmpeg-6.1.tar.gz
+          tar -xzf ffmpeg-6.1.tar.gz
+          mv ffmpeg-6.1 ffmpeg
+
+      # -----------------------------
+      # Compile FFmpeg Libraries
+      # -----------------------------
+
+      - name: Compile FFmpeg
+        run: |
+
+          NDK=$ANDROID_SDK_ROOT/ndk/$NDK_VERSION
+          TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+
+          cd ffmpeg
+
+          ./configure \
+            --prefix=$PWD/android \
+            --enable-shared \
+            --disable-static \
+            --disable-doc \
+            --disable-programs \
+            --enable-gpl \
+            --enable-protocol=https \
+            --target-os=android \
+            --arch=arm64 \
+            --cc=$TOOLCHAIN/bin/aarch64-linux-android${API_LEVEL}-clang \
+            --cross-prefix=$TOOLCHAIN/bin/llvm- \
+            --sysroot=$TOOLCHAIN/sysroot
+
+          make -j$(nproc)
+          make install
+
+      # -----------------------------
+      # Upload compiled libraries
+      # -----------------------------
+
+      - name: Upload FFmpeg Libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-libs
+          path: ffmpeg/android/lib/
