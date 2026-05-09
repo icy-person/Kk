@@ -1,4 +1,4 @@
-name: WARP Proxy Runner
+name: WARP Proxy Tunnel
 
 on:
   workflow_dispatch:
@@ -11,49 +11,44 @@ jobs:
     timeout-minutes: 360
 
     steps:
-
-      - name: Install tools
+      - name: Install base tools
         run: |
           sudo apt update
-          sudo apt install -y curl wget tar python3-pip
+          sudo apt install -y curl wget tar python3-pip net-tools
 
       - name: Install WGCF
         run: |
-          wget -q https://github.com/ViRb3/wgcf/releases/latest/download/wgcf_2.2.30_linux_amd64 -O wgcf
+          wget -q https://github.com/ViRb3/wgcf/releases/latest/download/wgcf_2.2.15_linux_amd64 -O wgcf
           chmod +x wgcf
           sudo mv wgcf /usr/local/bin/
-
-          yes | wgcf register --accept-tos || true
+          yes | wgcf register
           wgcf generate
 
       - name: Install WireProxy
         run: |
-          wget -q https://github.com/pufferffish/wireproxy/releases/latest/download/wireproxy_linux_amd64.tar.gz -O wireproxy.tar.gz
-          tar -xzf wireproxy.tar.gz
+          wget -q https://github.com/pufferffish/wireproxy/releases/latest/download/wireproxy_linux_amd64.tar.gz
+          tar -xzf wireproxy_linux_amd64.tar.gz
           chmod +x wireproxy
           sudo mv wireproxy /usr/local/bin/
 
-      - name: Build WireProxy Config
+      - name: Build WireProxy config
         run: |
           mkdir warp
-
-          PRIVATE_KEY=$(grep PrivateKey wgcf-profile.conf | awk '{print $3}')
-          ADDRESS=$(grep Address wgcf-profile.conf | awk '{print $3}')
-          DNS=$(grep DNS wgcf-profile.conf | awk '{print $3}')
-          PUBLIC_KEY=$(grep PublicKey wgcf-profile.conf | awk '{print $3}')
-          ENDPOINT=$(grep Endpoint wgcf-profile.conf | awk '{print $3}')
+          PRIVATE=$(grep PrivateKey wgcf-profile.conf | cut -d " " -f3)
+          ADDRESS=$(grep Address wgcf-profile.conf | cut -d " " -f3)
+          DNS=$(grep DNS wgcf-profile.conf | cut -d " " -f3)
+          PUBLIC=$(grep PublicKey wgcf-profile.conf | cut -d " " -f3)
+          ENDPOINT=$(grep Endpoint wgcf-profile.conf | cut -d " " -f3)
 
           cat > warp/config.ini <<EOF
           [Interface]
-          PrivateKey = $PRIVATE_KEY
+          PrivateKey = $PRIVATE
           Address = $ADDRESS
-          DNS = ${DNS:-1.1.1.1}
-          MTU = 1280
+          DNS = $DNS
 
           [Peer]
-          PublicKey = $PUBLIC_KEY
+          PublicKey = $PUBLIC
           Endpoint = $ENDPOINT
-          AllowedIPs = 0.0.0.0/0, ::/0
 
           [Socks5]
           BindAddress = 127.0.0.1:1080
@@ -63,61 +58,69 @@ jobs:
         run: |
           nohup wireproxy -c warp/config.ini > warp.log 2>&1 &
           sleep 8
-          echo "Wireproxy log:"
-          cat warp.log
-          ss -tunlp | grep 1080
+          netstat -tulpn | grep 1080
 
       - name: Test WARP
         run: |
           curl --socks5 127.0.0.1:1080 https://ipinfo.io
 
-      - name: Start HTTP Bridge
+      - name: Install Python bridge
         run: |
           pip3 install flask requests pysocks
 
-          cat << 'EOF' > proxy.py
+      - name: Create HTTP bridge
+        run: |
+          cat > proxy.py <<'PY'
           from flask import Flask, request, Response
           import requests
 
           app = Flask(__name__)
-          SOCKS="socks5h://127.0.0.1:1080"
+          SOCKS = "socks5h://127.0.0.1:1080"
 
           @app.route("/")
           def proxy():
-          url=request.args.get("url")
-          if not url:
-          return "missing url parameter"
+              url = request.args.get("url")
+              if not url:
+                  return "missing url", 400
+              try:
+                  r = requests.get(
+                      url,
+                      proxies={"http": SOCKS, "https": SOCKS},
+                      timeout=30
+                  )
+                  return Response(
+                      r.content,
+                      status=r.status_code,
+                      content_type=r.headers.get("Content-Type", "text/plain")
+                  )
+              except Exception as e:
+                  return str(e), 500
 
-          r=requests.get(url,proxies={"http":SOCKS,"https":SOCKS})
-          return Response(r.content,status=r.status_code)
+          if __name__ == "__main__":
+              app.run(host="0.0.0.0", port=8080)
+          PY
 
-          app.run(host="0.0.0.0",port=8080)
-          EOF
-
+      - name: Start HTTP bridge
+        run: |
           nohup python3 proxy.py > proxy.log 2>&1 &
           sleep 5
-          ss -tunlp | grep 8080
+          netstat -tulpn | grep 8080
 
       - name: Install Cloudflared
         run: |
           wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O cloudflared
           chmod +x cloudflared
 
-      - name: Start Cloudflare Tunnel
+      - name: Start Tunnel
         run: |
           nohup ./cloudflared tunnel --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
           sleep 10
-          echo "Tunnel info:"
           cat tunnel.log
 
-      - name: Keep Runner Alive
+      - name: Keep runner alive
         run: |
-          echo "Runner alive..."
-
-          for i in $(seq 1 360); do
-            echo "Minute $i"
-
-            curl --socks5 127.0.0.1:1080 https://ipinfo.io/ip || echo "warp check fail"
-
+          for i in $(seq 1 360)
+          do
+            curl --socks5 127.0.0.1:1080 https://ipinfo.io/ip
             sleep 60
           done
