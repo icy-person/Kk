@@ -15,7 +15,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt update
-          sudo apt install -y curl wget tar
+          sudo apt install -y curl wget tar python3-pip
 
       - name: Install WGCF
         run: |
@@ -33,7 +33,7 @@ jobs:
           chmod +x wireproxy
           sudo mv wireproxy /usr/local/bin/
 
-      - name: Build config
+      - name: Build WireProxy Config
         run: |
           mkdir warp
 
@@ -59,24 +59,53 @@ jobs:
           BindAddress = 127.0.0.1:1080
           EOF
 
-      - name: Start WARP
+      - name: Start WARP SOCKS5
         run: |
           nohup wireproxy -c warp/config.ini > warp.log 2>&1 &
           sleep 8
+          echo "Wireproxy log:"
+          cat warp.log
           ss -tunlp | grep 1080
 
       - name: Test WARP
         run: |
           curl --socks5 127.0.0.1:1080 https://ipinfo.io
 
-      - name: Install cloudflared
+      - name: Start HTTP Bridge
+        run: |
+          pip3 install flask requests pysocks
+
+          cat << 'EOF' > proxy.py
+          from flask import Flask, request, Response
+          import requests
+
+          app = Flask(__name__)
+          SOCKS="socks5h://127.0.0.1:1080"
+
+          @app.route("/")
+          def proxy():
+          url=request.args.get("url")
+          if not url:
+          return "missing url parameter"
+
+          r=requests.get(url,proxies={"http":SOCKS,"https":SOCKS})
+          return Response(r.content,status=r.status_code)
+
+          app.run(host="0.0.0.0",port=8080)
+          EOF
+
+          nohup python3 proxy.py > proxy.log 2>&1 &
+          sleep 5
+          ss -tunlp | grep 8080
+
+      - name: Install Cloudflared
         run: |
           wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O cloudflared
           chmod +x cloudflared
 
-      - name: Start Tunnel
+      - name: Start Cloudflare Tunnel
         run: |
-          nohup ./cloudflared tunnel --url http://127.0.0.1:1080 > tunnel.log 2>&1 &
+          nohup ./cloudflared tunnel --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
           sleep 10
           echo "Tunnel info:"
           cat tunnel.log
