@@ -1,4 +1,4 @@
-name: WARP Proxy Tunnel
+name: WARP SingBox Tunnel
 
 on:
   workflow_dispatch:
@@ -11,16 +11,18 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Install base tools
+
+      - name: Install tools
         run: |
           sudo apt update
-          sudo apt install -y curl wget tar python3-pip net-tools
+          sudo apt install -y curl wget tar net-tools
 
       - name: Install WGCF
         run: |
           wget -q https://github.com/ViRb3/wgcf/releases/latest/download/wgcf_2.2.30_linux_amd64 -O wgcf
           chmod +x wgcf
           sudo mv wgcf /usr/local/bin/
+
           yes | wgcf register
           wgcf generate
 
@@ -31,9 +33,10 @@ jobs:
           chmod +x wireproxy
           sudo mv wireproxy /usr/local/bin/
 
-      - name: Build WireProxy config
+      - name: Build WARP config
         run: |
           mkdir warp
+
           PRIVATE=$(grep PrivateKey wgcf-profile.conf | cut -d " " -f3)
           ADDRESS=$(grep Address wgcf-profile.conf | cut -d " " -f3)
           DNS=$(grep DNS wgcf-profile.conf | cut -d " " -f3)
@@ -54,95 +57,53 @@ jobs:
           BindAddress = 127.0.0.1:1080
           EOF
 
-      - name: Start WARP SOCKS5
+      - name: Start WARP
         run: |
           nohup wireproxy -c warp/config.ini > warp.log 2>&1 &
           sleep 8
           netstat -tulpn | grep 1080
 
-      - name: Test WARP
+      - name: Install sing-box
         run: |
-          curl --socks5 127.0.0.1:1080 https://ipinfo.io
+          wget -q https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-1.10.0-linux-amd64.tar.gz
+          tar -xzf sing-box-1.10.0-linux-amd64.tar.gz
+          sudo mv sing-box-*/sing-box /usr/local/bin/
 
-      - name: Install Python bridge
+      - name: Create sing-box config
         run: |
-          pip3 install flask requests pysocks
+          cat > config.json <<EOF
+          {
+            "log": {
+              "level": "info"
+            },
 
-      - name: Create HTTP bridge
+            "inbounds": [
+              {
+                "type": "http",
+                "tag": "http-in",
+                "listen": "0.0.0.0",
+                "listen_port": 8080
+              }
+            ],
+
+            "outbounds": [
+              {
+                "type": "socks",
+                "tag": "warp",
+                "server": "127.0.0.1",
+                "server_port": 1080
+              }
+            ],
+
+            "route": {
+              "final": "warp"
+            }
+          }
+          EOF
+
+      - name: Start sing-box
         run: |
-          cat > proxy.py <<'PY'
-          from flask import Flask, request, Response, stream_with_context
-          import requests
-          import urllib3
-
-          # غیرفعال کردن هشدارهای SSL برای تمیز ماندن لاگ
-          urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-          app = Flask(__name__)
-          SOCKS = "socks5h://127.0.0.1:1080"
-
-          @app.route("/", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-          def proxy():
-              url = request.args.get("url")
-              if not url:
-                  return "❌ داداش آدرس سایت رو یادت رفت بفرستی!", 400
-
-              # کپی هدرها (بجز Host که باعث ارور 403 میشه)
-              headers = {k: v for k, v in request.headers if k.lower() != 'host'}
-
-              try:
-                  # مرحله ۱: درخواست با stream=True
-                  # این یعنی فقط هدرها رو میگیره و منتظر بدنه نمیمونه
-                  r = requests.request(
-                      method=request.method,
-                      url=url,
-                      headers=headers,
-                      data=request.get_data(),
-                      cookies=request.cookies,
-                      proxies={"http": SOCKS, "https": SOCKS},
-                      allow_redirects=True,
-                      stream=True, 
-                      timeout=20,
-                      verify=False
-                  )
-
-                  # فیلتر کردن هدرهای Hop-by-Hop که نباید فوروارد بشن
-                  excluded_headers = [
-                      'content-encoding', 'transfer-encoding', 'connection', 
-                      'keep-alive', 'proxy-authenticate', 'proxy-authorization'
-                  ]
-                  response_headers = [
-                      (k, v) for k, v in r.raw.headers.items()
-                      if k.lower() not in excluded_headers
-                  ]
-
-                  # مرحله ۲: ایجاد یک Generator برای ارسال لقمه‌لقمه دیتا
-                  def generate():
-                      try:
-                          # هر ۱۶ کیلوبایت که اومد، بفرستش بره
-                          for chunk in r.iter_content(chunk_size=16384):
-                              if chunk:
-                                  yield chunk
-                      finally:
-                          r.close()
-
-                  # مرحله ۳: بازگرداندن پاسخ به صورت Stream
-                  return Response(
-                      stream_with_context(generate()), 
-                      status=r.status_code, 
-                      headers=response_headers
-                  )
-
-              except Exception as e:
-                  return f"🔥 انفجار در پروکسی: {str(e)}", 500
-
-          if __name__ == "__main__":
-              # اجرای فلاسک به صورت Threaded برای مدیریت درخواست‌های همزمان
-              app.run(host="0.0.0.0", port=8080, threaded=True)
-          PY
-      - name: Start HTTP bridge
-        run: |
-          nohup python3 proxy.py > proxy.log 2>&1 &
+          nohup sing-box run -c config.json > singbox.log 2>&1 &
           sleep 5
           netstat -tulpn | grep 8080
 
