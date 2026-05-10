@@ -65,7 +65,7 @@ jobs:
 
       - name: Install sing-box
         run: |
-          curl -L -o sing-box.tar.gz \https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-linux-amd64.tar.gz
+          curl -L -o sing-box.tar.gz https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-linux-amd64.tar.gz
           tar -xzf sing-box.tar.gz
           sudo mv sing-box*/sing-box /usr/local/bin/
 
