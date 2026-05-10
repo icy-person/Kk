@@ -77,45 +77,40 @@ jobs:
           app = Flask(__name__)
           SOCKS = "socks5h://127.0.0.1:1080"
 
-           @app.route("/", methods=["GET","POST","PUT","DELETE","PATCH"])
-           def proxy():
+          @app.route("/", methods=["GET","POST","PUT","DELETE","PATCH"])
+          def proxy():
+              url = request.args.get("url")
+              if not url:
+                  return "missing url", 400
 
-           url = request.args.get("url")
-           if not url:
-           return "missing url", 400
-   
-           headers = dict(request.headers)
-           headers.pop("Host", None)
+              headers = dict(request.headers)
+              headers.pop("Host", None)
 
-           try:
-  
-            r = requests.request(
-            method=request.method,
-            url=url,
-            headers=headers,
-            data=request.get_data(),
-            cookies=request.cookies,
-            proxies={"http": SOCKS, "https": SOCKS},
-            allow_redirects=True,
-            stream=True,
-            timeout=30
-          )
+              try:
+                  r = requests.request(
+                      method=request.method,
+                      url=url,
+                      headers=headers,
+                      data=request.get_data(),
+                      cookies=request.cookies,
+                      proxies={"http": SOCKS, "https": SOCKS},
+                      allow_redirects=True,
+                      timeout=30
+                  )
 
-          excluded = ["content-encoding","transfer-encoding","connection"]
-          response_headers = [(k,v) for k,v in r.headers.items() if k.lower() not in excluded]
+                  excluded = ["content-encoding", "transfer-encoding", "connection"]
+                  response_headers = [
+                      (k, v) for k, v in r.headers.items()
+                      if k.lower() not in excluded
+                  ]
 
-          return Response(
-            r.content,
-            r.status_code,
-            response_headers
-           )
+                  return Response(r.content, r.status_code, response_headers)
 
-          except Exception as e:
-          return str(e), 500
+              except Exception as e:
+                  return f"proxy error: {e}", 500
 
           if __name__ == "__main__":
-          app.run(host="0.0.0.0", port=8080)
-
+              app.run(host="0.0.0.0", port=8080)
           PY
 
       - name: Start HTTP bridge
