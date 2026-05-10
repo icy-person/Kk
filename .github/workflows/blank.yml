@@ -65,9 +65,20 @@ jobs:
 
       - name: Install sing-box
         run: |
-          curl -L -o sing-box.tar.gz https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-linux-amd64.tar.gz
+          # دانلود نسخه دقیق 1.13.11 مخصوص لینوکس 64 بیتی
+          curl -L -o sing-box.tar.gz https://github.com/SagerNet/sing-box/releases/download/v1.13.11/sing-box-1.13.11-linux-amd64.tar.gz
+          
+          # چک کردن حجم فایل (که دوباره اون فایل 9 بایتی قلابی رو نگیریم!)
+          ls -lh sing-box.tar.gz
+          
+          # استخراج و نصب
           tar -xzf sing-box.tar.gz
-          sudo mv sing-box*/sing-box /usr/local/bin/
+          # چون اسم فولدر استخراج شده ورژن رو داره، از ستاره استفاده می‌کنیم
+          sudo mv sing-box-*/sing-box /usr/local/bin/
+          
+          # تست نهایی برای اینکه مطمئن شیم نصب شده
+          sing-box version
+
 
 
       - name: Create sing-box config
