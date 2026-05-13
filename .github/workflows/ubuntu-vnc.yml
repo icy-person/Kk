@@ -1,0 +1,220 @@
+name: Ubuntu VNC Ultimate
+
+on:
+  workflow_dispatch:
+
+jobs:
+  desktop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+
+      - name: Update
+        run: |
+          sudo apt update
+
+      - name: Install Desktop
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y \
+            xfce4 \
+            xfce4-goodies \
+            tigervnc-standalone-server \
+            tigervnc-common \
+            novnc \
+            websockify \
+            dbus-x11 \
+            x11-xserver-utils \
+            python3-pip \
+            wget curl net-tools
+
+      - name: Configure VNC
+        run: |
+          mkdir -p ~/.vnc
+
+          echo "123456" | vncpasswd -f > ~/.vnc/passwd
+          chmod 600 ~/.vnc/passwd
+
+          cat > ~/.vnc/xstartup <<EOF
+          #!/bin/bash
+          xrdb \$HOME/.Xresources
+          startxfce4 &
+          EOF
+
+          chmod +x ~/.vnc/xstartup
+
+      - name: Start Desktop
+        run: |
+          vncserver :1 -geometry 1280x720 -depth 24
+
+          sleep 5
+
+      - name: Start noVNC
+        run: |
+          nohup websockify \
+            --web=/usr/share/novnc/ \
+            6080 localhost:5901 \
+            > novnc.log 2>&1 &
+
+          sleep 5
+
+      ########################################
+      # WARP
+      ########################################
+
+      - name: Install WGCF
+        run: |
+          wget -q https://github.com/ViRb3/wgcf/releases/latest/download/wgcf_2.2.30_linux_amd64 -O wgcf
+          chmod +x wgcf
+          sudo mv wgcf /usr/local/bin/
+
+          yes | wgcf register
+          wgcf generate
+
+      - name: Install WireProxy
+        run: |
+          wget -q https://github.com/pufferffish/wireproxy/releases/latest/download/wireproxy_linux_amd64.tar.gz
+
+          tar -xzf wireproxy_linux_amd64.tar.gz
+
+          chmod +x wireproxy
+
+          sudo mv wireproxy /usr/local/bin/
+
+      - name: Build WireProxy config
+        run: |
+          mkdir warp
+
+          PRIVATE=$(grep PrivateKey wgcf-profile.conf | cut -d " " -f3)
+          ADDRESS=$(grep Address wgcf-profile.conf | cut -d " " -f3)
+          DNS=$(grep DNS wgcf-profile.conf | cut -d " " -f3)
+          PUBLIC=$(grep PublicKey wgcf-profile.conf | cut -d " " -f3)
+          ENDPOINT=$(grep Endpoint wgcf-profile.conf | cut -d " " -f3)
+
+          cat > warp/config.ini <<EOF
+          [Interface]
+          PrivateKey = $PRIVATE
+          Address = $ADDRESS
+          DNS = $DNS
+
+          [Peer]
+          PublicKey = $PUBLIC
+          Endpoint = $ENDPOINT
+
+          [Socks5]
+          BindAddress = 127.0.0.1:1081
+          EOF
+
+      - name: Start WARP
+        run: |
+          nohup wireproxy -c warp/config.ini > warp.log 2>&1 &
+
+          sleep 8
+
+      ########################################
+      # Flask Bridge
+      ########################################
+
+      - name: Install Flask
+        run: |
+          pip3 install flask requests pysocks gevent
+
+      - name: Create Bridge
+        run: |
+          cat > app.py <<'PY'
+          from flask import Flask, request, Response
+          import requests
+
+          app = Flask(__name__)
+
+          SOCKS = "socks5h://127.0.0.1:1081"
+
+          @app.route('/', defaults={'path': ''})
+          @app.route('/<path:path>')
+          def proxy(path):
+
+              target = f"http://127.0.0.1:6080/{path}"
+
+              try:
+                  r = requests.get(
+                      target,
+                      stream=True,
+                      proxies={
+                          "http": SOCKS,
+                          "https": SOCKS
+                      }
+                  )
+
+                  excluded = [
+                      'content-encoding',
+                      'content-length',
+                      'transfer-encoding',
+                      'connection'
+                  ]
+
+                  headers = [
+                      (k, v)
+                      for k, v in r.raw.headers.items()
+                      if k.lower() not in excluded
+                  ]
+
+                  return Response(
+                      r.content,
+                      r.status_code,
+                      headers
+                  )
+
+              except Exception as e:
+                  return str(e), 500
+
+          app.run(
+              host='0.0.0.0',
+              port=8080,
+              threaded=True
+          )
+          PY
+
+      - name: Start Bridge
+        run: |
+          nohup python3 app.py > bridge.log 2>&1 &
+
+          sleep 5
+
+      ########################################
+      # Cloudflare Tunnel
+      ########################################
+
+      - name: Install cloudflared
+        run: |
+          wget -q \
+          https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+          -O cloudflared
+
+          chmod +x cloudflared
+
+      - name: Start Tunnel
+        run: |
+          nohup ./cloudflared tunnel \
+            --url http://127.0.0.1:8080 \
+            > tunnel.log 2>&1 &
+
+          sleep 15
+
+      - name: Show URL
+        run: |
+          echo ""
+          echo "========== LINK =========="
+          grep -o 'https://[-a-z0-9]*\.trycloudflare.com' tunnel.log
+          echo ""
+          echo "ADD:"
+          echo "/vnc.html"
+          echo ""
+          echo "PASSWORD: 123456"
+
+      - name: Keep Alive
+        run: |
+          while true
+          do
+            echo "Ubuntu Desktop Alive 😎"
+            sleep 60
+          done
