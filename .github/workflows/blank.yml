@@ -3,6 +3,9 @@ name: WARP Proxy Tunnel
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   warp:
     runs-on: ubuntu-latest
@@ -154,6 +157,24 @@ jobs:
           nohup ./cloudflared tunnel --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
           sleep 10
           cat tunnel.log
+
+
+      - name: Save tunnel URL to file
+        run: |
+          echo "🚀 Tunnel URL:" > tunnel.txt
+          echo "${TUNNEL_URL}" >> tunnel.txt
+          echo "" >> tunnel.txt
+          echo "⏳ Generated at: $(date)" >> tunnel.txt
+
+      - name: Commit and Push file
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+
+          git add tunnel.txt
+          git commit -m "Update tunnel URL"
+          git push
+
 
       - name: Keep runner alive
         run: |
